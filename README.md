@@ -1,0 +1,3 @@
+# xcog
+
+xarray -> STAC & COGs
