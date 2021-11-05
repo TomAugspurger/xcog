@@ -1,4 +1,4 @@
-import azure.storage.blob
+import fsspec
 import os
 import io
 import pandas as pd
@@ -8,6 +8,8 @@ import rasterio.warp
 import shapely.geometry
 import pystac
 import datetime
+
+from typing import Optional, Mapping
 
 
 def name_block(
@@ -41,7 +43,7 @@ def name_block(
     if y:
         y = f"y={y}"
 
-    if not any(band, x, y):
+    if not any([band, x, y]):
         raise ValueError("Must specify `include_band` or `x_dim` or `y_dim`")
 
     name = "-".join([thing for thing in [band, y, x] if thing])
@@ -52,38 +54,47 @@ def name_block(
 
 def write_block(
     block: xr.DataArray,
-    account_url: str,
-    container_name: str,
-    credential: str,
     prefix: str = "",
     x_dim: str = "x",
     y_dim: str = "y",
+    storage_options: Optional[Mapping[str, str]] = None,
 ):
     # this is specific to azure blob storage. We could generalize to accept an fsspec URL.
     import rioxarray  # noqa
 
-    container_client = azure.storage.blob.ContainerClient(
-        account_url, container_name, credential=credential
-    )
+    storage_options = storage_options or {}
     blob_name = name_block(block, prefix=prefix, x_dim=x_dim, y_dim=y_dim)
 
-    with io.BytesIO() as buffer:
+    fs, _, paths = fsspec.get_fs_token_paths(blob_name, storage_options=storage_options)
+    if len(paths) > 1:
+        raise ValueError("too many paths", paths)
+    path = paths[0]
+    memfs = fsspec.filesystem("memory")
+
+    with memfs.open("data", "wb") as buffer:
         block.squeeze().rio.to_raster(buffer, driver="COG")
         buffer.seek(0)
-        blob_client = container_client.get_blob_client(blob_name)
-        blob_client.upload_blob(buffer, overwrite=True)
+        fs.pipe_file(path, buffer)
 
     result = (
         block.isel(**{k: slice(1) for k in block.dims}).astype(object).compute().copy()
     )
     template_item = pystac.Item("id", None, None, datetime.datetime(2000, 1, 1), {})
-    item = itemize(block, template_item)
+    item = itemize(block, template_item, x_dim=x_dim, y_dim=y_dim, prefix=prefix)
 
     result[(0,) * block.ndim] = item
     return result
 
 
-def itemize(block, item: pystac.Item, time_dim="time"):
+def itemize(
+    block,
+    item: pystac.Item,
+    time_dim="time",
+    x_dim="x",
+    y_dim="y",
+    prefix: str = "",
+    href=name_block,
+):
     import rioxarray  # noqa
 
     item = item.clone()
@@ -92,7 +103,7 @@ def itemize(block, item: pystac.Item, time_dim="time"):
     bbox = rasterio.warp.transform_bounds(block.rio.crs, dst_crs, *block.rio.bounds())
     geometry = shapely.geometry.mapping(shapely.geometry.box(*bbox))
 
-    item.id = name_block(block, include_band=False)
+    item.id = name_block(block, include_band=False, x_dim=x_dim, y_dim=y_dim)
     item.geometry = geometry
     item.bbox = bbox
     item.datetime = pd.Timestamp(block.coords[time_dim].item()).to_pydatetime()
@@ -107,7 +118,10 @@ def itemize(block, item: pystac.Item, time_dim="time"):
     ext.transform = list(block.rio.transform())[:6]
     ext.add_to(item)
 
-    asset = pystac.Asset(href=name_block(block), media_type=pystac.MediaType.COG)
+    asset = pystac.Asset(
+        href=name_block(block, x_dim=x_dim, y_dim=y_dim, prefix=prefix),
+        media_type=pystac.MediaType.COG,
+    )
     asset.extra_fields["eo:bands"] = [
         dict(
             name=block.band.item(),
