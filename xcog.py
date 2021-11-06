@@ -1,13 +1,13 @@
-import fsspec
 import os
-import io
+import datetime
+
+import fsspec
 import pandas as pd
 import xarray as xr
 
 import rasterio.warp
 import shapely.geometry
 import pystac
-import datetime
 
 from typing import Optional, Mapping
 
@@ -18,9 +18,36 @@ def name_block(
     include_band: bool = True,
     x_dim="x",
     y_dim="y",
-):
+) -> str:
     """
     Get the name for a block, based on the coordinates at the top-left corner.
+
+    Parameters
+    ----------
+    block : xarray.DataArray
+        A singly-chunked DataArray
+    prefix : str, default ""
+        The prefix to use when writing to disk. This might be just a path prefix
+        like "path/to/dir", in which case the data will be written to disk. Or it
+        might be an fsspec-uri, in which case the file will be written to that
+        file system (e.g. Azure Blob Storage, S3, GCS)
+    include_band : bool, default True
+        Whether to include the "band" component in the name. You might wish to
+        exclude the band component when generating an ID for a STAC Item, which
+        will merge multiple assets into a single Item.
+    x_dim : str, default "x"
+        The name of the x dimension / coordinate.
+    y_dim : str, default "y"
+        The name of the y dimension / coordinate.
+
+    Returns
+    -------
+    str
+        The unique name for the block.
+
+    Examples
+    --------
+    >>> import xarray as xr
     """
     time = pd.Timestamp(block.coords["time"][0].item()).isoformat()
 
@@ -34,7 +61,7 @@ def name_block(
 
     if include_band:
         band = block.coords["band"][0].item()
-        band = f"band={band}-"
+        band = f"band={band}"
     else:
         band = ""
 
@@ -59,6 +86,36 @@ def write_block(
     y_dim: str = "y",
     storage_options: Optional[Mapping[str, str]] = None,
 ):
+    """
+    Write a block of a DataArray to disk.
+
+    Parameters
+    ----------
+    block : xarray.DataArray
+        A singly-chunked DataArray
+    prefix : str, default ""
+        The prefix to use when writing to disk. This might be just a path prefix
+        like "path/to/dir", in which case the data will be written to disk. Or it
+        might be an fsspec-uri, in which case the file will be written to that
+        file system (e.g. Azure Blob Storage, S3, GCS)
+    x_dim : str, default "x"
+        The name of the x dimension / coordinate.
+    y_dim : str, default "y"
+        The name of the y dimension / coordinate.
+    storage_options : mapping, optional
+        A mapping of additional keyword arguments to pass through to the fsspec
+        filesystem class derived from the protocol in `prefix`.
+
+    Returns
+    -------
+    xarray.DataArray
+        A size-1 DataArray with the :class:pystac.Item for that block.
+
+    Examples
+    --------
+    >>> import xarray as xr
+ 
+    """
     # this is specific to azure blob storage. We could generalize to accept an fsspec URL.
     import rioxarray  # noqa
 
@@ -89,12 +146,54 @@ def write_block(
 def itemize(
     block,
     item: pystac.Item,
+    *,
+    prefix: str = "",
     time_dim="time",
     x_dim="x",
     y_dim="y",
-    prefix: str = "",
-    href=name_block,
-):
+) -> pystac.Item:
+    """
+    Generate a pystac.Item for an xarray DataArray
+
+    Parameters
+    ----------
+    block : xarray.DataArray
+        A singly-chunked DataArray
+    item : pystac.Item
+        A template pystac.Item to use to construct. The following properties will be
+        overwritten using data derived from the DataArray:
+
+        * id
+        * geometry
+        * datetime
+        * bbox
+        * proj:bbox
+        * proj:shape
+        * proj:geometry
+        * proj:transform
+
+    prefix : str, default ""
+        The prefix to use when writing to disk. This might be just a path prefix
+        like "path/to/dir", in which case the data will be written to disk. Or it
+        might be an fsspec-uri, in which case the file will be written to that
+        file system (e.g. Azure Blob Storage, S3, GCS)
+    time_dim : str, default "time"
+        The name of the time dimension / coordinate.
+    x_dim : str, default "x"
+        The name of the x dimension / coordinate.
+    y_dim : str, default "y"
+        The name of the y dimension / coordinate.
+    storage_options : mapping, optional
+        A mapping of additional keyword arguments to pass through to the fsspec
+        filesystem class derived from the protocol in `prefix`.
+
+    Returns
+    -------
+    xarray.DataArray
+        A size-1 DataArray with the :class:pystac.Item for that block.
+
+
+    """
     import rioxarray  # noqa
 
     item = item.clone()
@@ -118,6 +217,7 @@ def itemize(
     ext.transform = list(block.rio.transform())[:6]
     ext.add_to(item)
 
+    # TODO: We need to generalize this `href` somewhat.
     asset = pystac.Asset(
         href=name_block(block, x_dim=x_dim, y_dim=y_dim, prefix=prefix),
         media_type=pystac.MediaType.COG,
