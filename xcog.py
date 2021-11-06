@@ -1,3 +1,6 @@
+"""
+xarray -> List[cog]
+"""
 import datetime
 import os
 from typing import Optional, Mapping
