@@ -7,6 +7,7 @@ from typing import Optional, Mapping
 
 
 import fsspec
+import numpy as np
 import pandas as pd
 import pystac
 import rasterio.warp
@@ -226,15 +227,21 @@ def itemize(
         href=name_block(block, x_dim=x_dim, y_dim=y_dim, prefix=prefix),
         media_type=pystac.MediaType.COG,
     )
-    asset.extra_fields["eo:bands"] = [
-        dict(
-            name=block.band.item(),
-            common_name=block.common_name.item(),
-            center_wavelength=block.center_wavelength.item(),
-            full_width_half_max=block.full_width_half_max.item(),
-        )
-    ]
+    # asset.extra_fields["eo:bands"] = [
+    #     dict(
+    #         name=block.band.item(),
+    #         common_name=block.common_name.item(),
+    #         center_wavelength=block.center_wavelength.item(),
+    #         full_width_half_max=block.full_width_half_max.item(),
+    #     )
+    # ]
 
     item.add_asset(block.band[0].item(), asset)
 
     return item
+
+
+def make_template(data):
+    offsets = dict(zip(data.dims, [np.hstack([np.array(0,), np.cumsum(x)[:-1]]) for x in data.chunks]))
+    template = data.isel(**offsets).astype(object)
+    return template

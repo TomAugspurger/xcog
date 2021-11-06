@@ -16,6 +16,7 @@ dependencies = [
     "rasterio",
     "shapely",
     "pystac",
+    "numpy",
 ]
 
 
