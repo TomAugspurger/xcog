@@ -11,6 +11,8 @@ import pystac
 
 from typing import Optional, Mapping
 
+__version__ = "0.0.1"
+
 
 def name_block(
     block: xr.DataArray,
