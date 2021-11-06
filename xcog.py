@@ -3,7 +3,9 @@ xarray -> List[cog]
 """
 import datetime
 import os
-from typing import Optional, Mapping
+import itertools
+import operator
+from typing import Optional, Mapping, List
 
 
 import fsspec
@@ -227,6 +229,7 @@ def itemize(
         href=name_block(block, x_dim=x_dim, y_dim=y_dim, prefix=prefix),
         media_type=pystac.MediaType.COG,
     )
+    # TODO: optional common_name
     # asset.extra_fields["eo:bands"] = [
     #     dict(
     #         name=block.band.item(),
@@ -241,7 +244,31 @@ def itemize(
     return item
 
 
-def make_template(data):
+def make_template(data: xr.DataArray) -> List[pystac.Item]:
     offsets = dict(zip(data.dims, [np.hstack([np.array(0,), np.cumsum(x)[:-1]]) for x in data.chunks]))
     template = data.isel(**offsets).astype(object)
     return template
+
+
+def to_cog_and_stac(data: xr.DataArray) -> List[pystac.Item]:
+    template = make_template(data)
+
+    result = template.compute()
+    items2 = result.data.ravel().tolist()
+
+    new_items = []
+    key = operator.attrgetter("id")
+
+    # group by id.
+    for _, group in (itertools.groupby(sorted(items2, key=key), key=key)):
+        items = list(group)
+        item = items[0].clone()
+        new_items.append(item)
+        for other_item in items:
+            other_item = other_item.clone()
+            for k, asset in other_item.assets.items():
+                # path = urllib.request.quote(asset.href)
+                # asset.href = rewrite_href(asset.href)
+                # asset.href = href
+                item.add_asset(k, asset)
+    return new_items
