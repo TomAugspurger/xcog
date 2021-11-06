@@ -1,15 +1,14 @@
-import os
 import datetime
+import os
+from typing import Optional, Mapping
+
 
 import fsspec
 import pandas as pd
-import xarray as xr
-
+import pystac
 import rasterio.warp
 import shapely.geometry
-import pystac
-
-from typing import Optional, Mapping
+import xarray as xr
 
 __version__ = "0.0.1"
 
