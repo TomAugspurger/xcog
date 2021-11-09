@@ -138,6 +138,11 @@ def write_block(
     with memfs.open("data", "wb") as buffer:
         block.squeeze().rio.to_raster(buffer, driver="COG")
         buffer.seek(0)
+
+        if fs.protocol == "file":
+            # can't write a MemoryFile to an io.BytesIO
+            # fsspec should arguably handle this
+            buffer = buffer.getvalue()
         fs.pipe_file(path, buffer)
 
     result = (
@@ -250,11 +255,28 @@ def make_template(data: xr.DataArray) -> List[pystac.Item]:
     return template
 
 
-def to_cog_and_stac(data: xr.DataArray) -> List[pystac.Item]:
+def to_cog_and_stac(data: xr.DataArray, prefix="", storage_options=None) -> List[pystac.Item]:
     template = make_template(data)
+    storage_options = storage_options or {}
 
-    result = template.compute()
-    items2 = result.data.ravel().tolist()
+    r = data.map_blocks(
+        write_block,
+        kwargs=dict(
+            prefix=prefix,
+            storage_options=storage_options
+        ),
+        template=template
+    )
+    result = r.compute()
+    new_items = collate(result)
+    return new_items
+
+
+def collate(items: xr.DataArray) -> List[pystac.Item]:
+    """
+    Collate many items by id, gathering together assets with the same item ID.
+    """
+    items2 = items.data.ravel().tolist()
 
     new_items = []
     key = operator.attrgetter("id")
@@ -267,8 +289,5 @@ def to_cog_and_stac(data: xr.DataArray) -> List[pystac.Item]:
         for other_item in items:
             other_item = other_item.clone()
             for k, asset in other_item.assets.items():
-                # path = urllib.request.quote(asset.href)
-                # asset.href = rewrite_href(asset.href)
-                # asset.href = href
-                item.add_asset(k, asset)
+                    item.add_asset(k, asset)
     return new_items
