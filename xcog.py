@@ -1,6 +1,8 @@
 """
 xarray -> List[cog]
 """
+from __future__ import annotations
+
 import datetime
 import os
 import itertools
@@ -144,12 +146,13 @@ def write_block(
             # fsspec should arguably handle this
             buffer = buffer.getvalue()
         fs.pipe_file(path, buffer)
+        nbytes = len(buffer)
 
     result = (
         block.isel(**{k: slice(1) for k in block.dims}).astype(object).compute().copy()
     )
     template_item = pystac.Item("id", None, None, datetime.datetime(2000, 1, 1), {})
-    item = itemize(block, template_item, x_dim=x_dim, y_dim=y_dim, prefix=prefix)
+    item = itemize(block, template_item, nbytes=nbytes, x_dim=x_dim, y_dim=y_dim, prefix=prefix)
 
     result[(0,) * block.ndim] = item
     return result
@@ -158,7 +161,10 @@ def write_block(
 def itemize(
     block,
     item: pystac.Item,
+    nbytes: int,
     *,
+    asset_roles: list[str] | None = None,
+    asset_media_type=pystac.MediaType.COG,
     prefix: str = "",
     time_dim="time",
     x_dim="x",
@@ -167,13 +173,8 @@ def itemize(
     """
     Generate a pystac.Item for an xarray DataArray
 
-    Parameters
-    ----------
-    block : xarray.DataArray
-        A singly-chunked DataArray
-    item : pystac.Item
-        A template pystac.Item to use to construct. The following properties will be
-        overwritten using data derived from the DataArray:
+    The following properties will be be set on the output item using data derived
+    from the DataArray:
 
         * id
         * geometry
@@ -184,6 +185,18 @@ def itemize(
         * proj:geometry
         * proj:transform
 
+    The Item will have a single asset. The asset will have the following properties set:
+
+        * file:size
+
+    Parameters
+    ----------
+    block : xarray.DataArray
+        A singly-chunked DataArray
+    item : pystac.Item
+        A template pystac.Item to use to construct. 
+    asset_roles:
+        The roles to assign to the item's asset.
     prefix : str, default ""
         The prefix to use when writing to disk. This might be just a path prefix
         like "path/to/dir", in which case the data will be written to disk. Or it
@@ -203,8 +216,6 @@ def itemize(
     -------
     xarray.DataArray
         A size-1 DataArray with the :class:pystac.Item for that block.
-
-
     """
     import rioxarray  # noqa
 
@@ -229,22 +240,16 @@ def itemize(
     ext.transform = list(block.rio.transform())[:6]
     ext.add_to(item)
 
+    roles = asset_roles or ["data"]
+
     # TODO: We need to generalize this `href` somewhat.
     asset = pystac.Asset(
         href=name_block(block, x_dim=x_dim, y_dim=y_dim, prefix=prefix),
-        media_type=pystac.MediaType.COG,
+        media_type=asset_media_type,
+        roles=roles,
     )
-    # TODO: optional common_name
-    # asset.extra_fields["eo:bands"] = [
-    #     dict(
-    #         name=block.band.item(),
-    #         common_name=block.common_name.item(),
-    #         center_wavelength=block.center_wavelength.item(),
-    #         full_width_half_max=block.full_width_half_max.item(),
-    #     )
-    # ]
-
-    item.add_asset(block.band[0].item(), asset)
+    asset.extra_fields["file:size"] = nbytes
+    item.add_asset(str(block.band[0].item()), asset)
 
     return item
 
