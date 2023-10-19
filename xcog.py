@@ -123,7 +123,7 @@ def write_block(
     Examples
     --------
     >>> import xarray as xr
- 
+
     """
     # this is specific to azure blob storage. We could generalize to accept an fsspec URL.
     import rioxarray  # noqa
@@ -146,7 +146,7 @@ def write_block(
             # fsspec should arguably handle this
             buffer = buffer.getvalue()
         fs.pipe_file(path, buffer)
-        nbytes = len(buffer)
+        nbytes = buffer.tell()
 
     result = (
         block.isel(**{k: slice(1) for k in block.dims}).astype(object).compute().copy()
@@ -194,7 +194,7 @@ def itemize(
     block : xarray.DataArray
         A singly-chunked DataArray
     item : pystac.Item
-        A template pystac.Item to use to construct. 
+        A template pystac.Item to use to construct.
     asset_roles:
         The roles to assign to the item's asset.
     prefix : str, default ""
